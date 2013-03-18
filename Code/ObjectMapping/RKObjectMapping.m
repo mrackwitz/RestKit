@@ -40,26 +40,23 @@ static RKSourceToDesinationKeyTransformationBlock defaultSourceToDestinationKeyT
 @end
 
 @interface RKMappingInverter : NSObject
-@property (nonatomic, strong) RKObjectMapping *mapping;
 @property (nonatomic, strong) NSMutableDictionary *invertedMappings;
 
-- (id)initWithMapping:(RKObjectMapping *)mapping;
-- (RKObjectMapping *)inverseMappingWithPredicate:(BOOL (^)(RKPropertyMapping *propertyMapping))predicate;
+- (RKObjectMapping *)invertMapping:(RKObjectMapping *)mapping;
 @end
 
 @implementation RKMappingInverter
 
-- (id)initWithMapping:(RKObjectMapping *)mapping
+- (id)init
 {
-    self = [self init];
+    self = [super init];
     if (self) {
-        self.mapping = mapping;
         self.invertedMappings = [NSMutableDictionary dictionary];
     }
     return self;
 }
 
-- (RKObjectMapping *)invertMapping:(RKObjectMapping *)mapping withPredicate:(BOOL (^)(RKPropertyMapping *propertyMapping))predicate
+- (RKObjectMapping *)invertMapping:(RKObjectMapping *)mapping
 {
     // Use an NSValue to obtain a non-copied key into our inversed mappings dictionary
     NSValue *dictionaryKey = [NSValue valueWithNonretainedObject:mapping];
@@ -71,27 +68,24 @@ static RKSourceToDesinationKeyTransformationBlock defaultSourceToDestinationKeyT
     [inverseMapping copyPropertiesFromMapping:mapping];
     
     for (RKAttributeMapping *attributeMapping in mapping.attributeMappings) {
-        if (predicate && !predicate(attributeMapping)) continue;
         [inverseMapping addPropertyMapping:[RKAttributeMapping attributeMappingFromKeyPath:attributeMapping.destinationKeyPath toKeyPath:attributeMapping.sourceKeyPath]];
     }
     
     for (RKRelationshipMapping *relationshipMapping in mapping.relationshipMappings) {
-        RKObjectMapping *mapping = (RKObjectMapping *) relationshipMapping.mapping;
-        if (! [mapping isKindOfClass:[RKObjectMapping class]]) {
+        RKObjectMapping *relatedMapping = (RKObjectMapping *) relationshipMapping.mapping;
+        if (! [relatedMapping isKindOfClass:[RKObjectMapping class]]) {
             RKLogWarning(@"Unable to generate inverse mapping for relationship '%@': %@ relationships cannot be inversed.", relationshipMapping.sourceKeyPath, NSStringFromClass([mapping class]));
             continue;
         }
-        if (predicate && !predicate(relationshipMapping)) continue;
-        RKMapping *inverseRelationshipMapping = [self invertMapping:mapping withPredicate:predicate];
-        if (inverseRelationshipMapping) [inverseMapping addPropertyMapping:[RKRelationshipMapping relationshipMappingFromKeyPath:relationshipMapping.destinationKeyPath toKeyPath:relationshipMapping.sourceKeyPath withMapping:inverseRelationshipMapping]];
+        RKMapping *inverseRelatedMapping = relatedMapping.inverseMapping;
+        if (!inverseRelatedMapping) {
+            RKLogWarning(@"Unable to generate inverse mapping for relationship '%@': could not inverse related mapping.", relationshipMapping.sourceKeyPath);
+            continue;
+        }
+        [inverseMapping addPropertyMapping:[RKRelationshipMapping relationshipMappingFromKeyPath:relationshipMapping.destinationKeyPath toKeyPath:relationshipMapping.sourceKeyPath withMapping:inverseRelatedMapping]];
     }
     
     return inverseMapping;
-}
-
-- (RKObjectMapping *)inverseMappingWithPredicate:(BOOL (^)(RKPropertyMapping *propertyMapping))predicate
-{
-    return [self invertMapping:self.mapping withPredicate:predicate];
 }
 
 @end
@@ -101,6 +95,9 @@ static RKSourceToDesinationKeyTransformationBlock defaultSourceToDestinationKeyT
 @end
 
 @interface RKObjectMapping ()
+
+@property (nonatomic, strong, readwrite) RKObjectMapping* inverseMapping;
+
 @property (nonatomic, weak, readwrite) Class objectClass;
 @property (nonatomic, strong) NSMutableArray *mutablePropertyMappings;
 
@@ -109,6 +106,8 @@ static RKSourceToDesinationKeyTransformationBlock defaultSourceToDestinationKeyT
 @end
 
 @implementation RKObjectMapping
+
+static RKMappingInverter *mappingInverter;
 
 + (instancetype)mappingForClass:(Class)objectClass
 {
@@ -341,15 +340,15 @@ static RKSourceToDesinationKeyTransformationBlock defaultSourceToDestinationKeyT
     }
 }
 
-- (instancetype)inverseMappingWithPropertyMappingsPassingTest:(BOOL (^)(RKPropertyMapping *propertyMapping))predicate
-{
-    RKMappingInverter *mappingInverter = [[RKMappingInverter alloc] initWithMapping:self];
-    return [mappingInverter inverseMappingWithPredicate:predicate];
-}
-
 - (instancetype)inverseMapping
 {
-    return [self inverseMappingWithPropertyMappingsPassingTest:nil];
+    if (!mappingInverter) {
+        mappingInverter = [[RKMappingInverter alloc] init];
+    }
+    if (!_inverseMapping) {
+        _inverseMapping = [mappingInverter invertMapping:self];
+    }
+    return _inverseMapping;
 }
 
 - (void)addAttributeMappingFromKeyOfRepresentationToAttribute:(NSString *)attributeName
